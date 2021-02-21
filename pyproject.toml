@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "portscanner"
-version = "0.5.0"
+version = "0.5.1"
 description = ""
 authors = ["GoodiesHQ <aarcher73k@gmail.com>"]
 
@@ -10,7 +10,6 @@ portscanner = 'portscanner.console:run'
 [tool.poetry.dependencies]
 python = "^3.9"
 aiodns = "^2.0.0"
-black = "^20.8b1"
 colorama = "^0.4.4"
 
 [tool.poetry.dev-dependencies]
