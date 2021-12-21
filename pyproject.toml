@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "portscanner"
-version = "0.5.3"
+version = "0.6.0"
 description = "Asynchronous Port Scanner"
 authors = ["GoodiesHQ <aarcher73k@gmail.com>"]
 

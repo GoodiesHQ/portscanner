@@ -62,8 +62,11 @@ async def run_scanner(
     verbose: bool = False,
 ):
     with PortScanner(workers, timeout, banner_buffer) as scanner:
+        first = True
         async for info in scanner.scan(hosts, ports, open=open_only, qtype=qtype, all=resolve_all, verbose=verbose):
-            style(info, as_json)
+            style(info, as_json, first)
+            if first:
+                first = False
 
 
 def run():
@@ -173,8 +176,8 @@ def run():
         banner_buffer=args.banner_buffer,
         verbose=args.verbose,
     )
-
-    loop = asyncio.get_event_loop()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
         loop.run_until_complete(task)
     except KeyboardInterrupt:
