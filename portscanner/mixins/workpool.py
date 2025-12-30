@@ -1,9 +1,9 @@
 """
 WorkPool implementation to allow for limited execution of an unbounded number of tasks
 """
-from abc import ABC, abstractmethod, abstractproperty
+from abc import ABC, abstractmethod
 from contextlib import suppress
-from typing import Coroutine, Callable, Iterable
+from typing import Coroutine, Iterable
 import asyncio
 
 __all__ = [
@@ -21,15 +21,18 @@ class MxWorkPoolBase(ABC):
     def __init__(self, worker_count: int):
         """Initialize the work pool"""
 
-    @abstractproperty
+    @property
+    @abstractmethod
     def worker_available(self) -> bool:
         """Return True if workers are available, False if semahore is locked"""
 
-    @abstractproperty
+    @property
+    @abstractmethod
     def worker_sem(self) -> asyncio.Semaphore:
         """Read-only handle to the worker semaphore used"""
 
-    @abstractproperty
+    @property
+    @abstractmethod
     def worker_count(self) -> int:
         """Number of workers"""
 
@@ -80,24 +83,33 @@ class MxWorkPool(MxWorkPoolBase):
         return fut
 
     async def worker_run_many(self, coros: Iterable[Coroutine], timeout: float = 1.0):
-        futures = set()
+        futures: set[asyncio.Future] = set()
         init = False
-
-        async def check(t):
+        
+        async def drain(t: float):
             nonlocal futures
-            if futures:
-                done, futures = await asyncio.wait(
-                    futures, timeout=t, return_when=asyncio.FIRST_COMPLETED
-                )
-                for task in done:
-                    if not task.cancelled() and not task.exception():
-                        yield task.result()
+            if not futures:
+                return
+            done, futures = await asyncio.wait(
+                futures, timeout=t, return_when=asyncio.FIRST_COMPLETED
+            )
+
+            for task in done:
+                if task.cancelled():
+                    continue
+                exc = task.exception()
+                if exc is not None:
+                    for fut in futures:
+                        fut.cancel()
+                    await asyncio.gather(*futures, return_exceptions=True)
+                    raise exc
+                yield task.result()
 
         wait = 0
         try:
             while futures or not init:
                 init = True
-                async for item in check(wait):
+                async for item in drain(wait):
                     yield item
                 if len(futures) < self.worker_count:
                     wait = 0
@@ -106,5 +118,12 @@ class MxWorkPool(MxWorkPoolBase):
                         continue
                 wait = timeout
         except asyncio.CancelledError:
-            for future in futures:
-                future.cancel()
+            for fut in futures:
+                fut.cancel()
+            await asyncio.gather(*futures, return_exceptions=True)
+            raise
+        finally:
+            for fut in futures:
+                fut.cancel()
+            if futures:
+                await asyncio.gather(*futures, return_exceptions=True)

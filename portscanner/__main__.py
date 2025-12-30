@@ -7,6 +7,7 @@ from typing import Sequence, Union, Optional
 import asyncio
 import json
 import sys
+import traceback
 
 from portscanner.scanner import PortScanner
 from portscanner.types import ScanInfo, ScanState
@@ -30,18 +31,20 @@ TOP_PORTS = port_range(
 
 def style(info: ScanInfo, as_json: bool = False, first: bool = False):
     if not as_json:
-        hstr = f"{str(info.host):<40} "
+        hstr = f"{str(info.addr):<40} "
+        nstr = info.name if info.name else ""
         pclr = {
             ScanState.OPEN: Clr.GRN,
             ScanState.CLOSED: Clr.RED,
             ScanState.TIMEOUT: Clr.PRP,
             ScanState.UNKNOWN: Clr.YLW,
         }.get(info.state)
-        pstr = f"{pclr}{info.port:<6} {info.state.name:<8}{Clr.RST} "
+        pstr = f"{pclr}{info.port:<6} {info.state.name:<10}{Clr.RST}{nstr}"
         print(Clr.WHT + hstr + pstr + (info.banner or ""))
     else:
         data = dict(
-            host=str(info.host),
+            name=str(info.name),
+            addr=str(info.addr),
             port=str(info.port),
             state=str(info.state.name),
             banner=info.banner,
@@ -176,16 +179,19 @@ def run():
         banner_buffer=args.banner_buffer,
         verbose=args.verbose,
     )
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
         loop.run_until_complete(task)
+    except ValueError as ve:
+        print(f"[-] Error: {ve}")
     except KeyboardInterrupt:
-        print("[+] Exiting...")
+        print("[!] Scan interrupted by user")
     except Exception as e:
-        import traceback
-
+        print(e)
         traceback.print_exc()
+        pass
     finally:
         cleanup(loop)
 

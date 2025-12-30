@@ -2,15 +2,15 @@
 DNS Resolver mixin for PortScanner
 """
 
-from abc import ABC, abstractmethod, abstractproperty
+from abc import abstractmethod
 from contextlib import suppress
-from ipaddress import ip_address, ip_network
-from typing import Union, Optional, List, Collection, get_args
+from ipaddress import ip_network
+from typing import Optional, List, Collection, get_args
 import asyncio
 
 from aiodns import DNSResolver
 from aiodns.error import DNSError
-from portscanner.types import IPAddress, IPNetwork, IPAny, IPTypes
+from portscanner.types import IPAddress, IPNetwork, IPAny, IPTypes, Target
 
 __all__ = [
     "MxResolverBase",
@@ -19,14 +19,16 @@ __all__ = [
 
 
 class MxResolverBase:
-    @abstractproperty
+    @property
+    @abstractmethod
     def resolver(self) -> DNSResolver:
         """
         Return the resolver used for the mixin
         Should be located at `self._resolver` by the child class
         """
 
-    @abstractproperty
+    @property
+    @abstractmethod
     def timeout(self) -> float:
         """
         Return the resolver timeout used for the mixin
@@ -47,8 +49,9 @@ class MxResolverBase:
         Upon error or NXDOMAIN, return None
         """
 
+from .loop import MxLoopBase
 
-class MxResolver(MxResolverBase):
+class MxResolver(MxResolverBase, MxLoopBase):
     DEFAULT_TIMEOUT = 1.0
 
     @property
@@ -67,37 +70,80 @@ class MxResolver(MxResolverBase):
     def timeout(self, timeout: float):
         self._timeout = timeout
 
-    async def resolve_all(self, host: IPAny, qtype: str = "A") -> List[IPNetwork]:
+    async def resolve_all(self, host: IPAny, qtype: str = "A") -> List[Target]:
         """
-        Return a list of valid IPv4/IPv6 addresses
+        Resolve a host into all of its IP address types. This could be a 
+        string literal IP address or CIDR, or it could be a hostname to resolve.
+        On error or NXDOMAIN, return an empty list
         """
+        # Name is only required for resolved hosts, so default to empty string
+        name = ""
+
+        # If the host is already an IP address or network, return it directly
         if isinstance(host, get_args(IPTypes)):
-            return [host]
-        with suppress(ValueError):
-            return [ip_network(host, strict=False)]
+            return [Target(name="", host=host)]
+
+        # Check if the host is a literal IP address or CIDR
+        try:
+            return [Target(name="", host=ip_network(host, strict=False))]
+        except ValueError:
+            # Not a literal IP address or CIDR, continue to resolve
+            pass
+
+        # Normalize qtype into a list
         if isinstance(qtype, str):
             qtypes = [qtype]
         elif isinstance(qtype, Collection):
             qtypes = list(qtype)
         else:
             raise ValueError(f"Invalid Query Type '{qtype}'")
-        tasks = set()
-        for qtype in self._Q if qtypes is None else qtypes:
-            if (qtype := qtype.upper()) not in self._Q:
-                raise ValueError(f"Supported query types: {', '.join(self._Q)}")
-            tasks.add(asyncio.wait_for(self.resolver.query(host, qtype), self.timeout))
-        with suppress(TimeoutError, asyncio.TimeoutError, DNSError):
-            results, _ = await asyncio.wait(tasks, timeout=self.timeout)
-            return list(
-                ip_network(r.host, strict=False)
-                for res in results
-                for r in res.result()
-                if not res.cancelled() or res.exception()
-            )
-        return []
 
-    async def resolve(self, host: IPAny, qtype: str = "A") -> Optional[IPTypes]:
-        if isinstance(host, get_args(IPTypes)):
-            return host
-        ips = await self.resolve_all(host, qtype)
-        return ips[0] if ips else None
+        # Validate the allowed query types (A/AAAA)
+        qtypes = [qt.upper() for qt in qtypes]
+        for qt in qtypes:
+            if qt not in self._Q:
+                raise ValueError(f"Supported query types: {', '.join(self._Q)}")
+
+        # NOTE: aiodns.query returns a Future, not a coroutine
+        futs = [asyncio.ensure_future(self.resolver.query(host, qt), loop=self.loop) for qt in qtypes]
+
+        try:
+            # Await all queries with the provided timeout
+            responses = await asyncio.wait_for(
+                asyncio.gather(*futs, return_exceptions=True),
+                timeout=self.timeout,
+            )
+        except (asyncio.TimeoutError, TimeoutError):
+            print("timed out!")
+            for fut in futs:
+                fut.cancel()
+            await asyncio.gather(*futs, return_exceptions=True)
+            return []
+
+        # All names resolve to the same host, so just use the first
+        name = host
+        results: List[Target] = []
+        for resp in responses:
+            if isinstance(resp, BaseException):
+                if isinstance(resp, DNSError):
+                    pass
+                else:
+                    print(f"[-] Error: {resp}")
+                continue
+            for r in resp:
+                with suppress(ValueError):
+                    results.append(
+                        Target(name=name,
+                               host=ip_network(r.host, strict=False)
+                        )
+                    )
+
+        return results
+    
+    async def resolve(self, host: IPAny, qtype: str = "A") -> Optional[Target]:
+        """
+        Resolve a host into the first IP address returned by `resolve_all`
+        On error or NXDOMAIN, return None
+        """
+        targets = await self.resolve_all(host, qtype)
+        return targets[0] if targets else None

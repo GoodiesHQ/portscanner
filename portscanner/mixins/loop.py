@@ -2,7 +2,7 @@
 Loop acquisition mixin for PortScanner
 """
 
-from abc import ABC, abstractstaticmethod, abstractproperty
+from abc import ABC, abstractmethod
 from contextlib import suppress
 from typing import Optional
 import asyncio
@@ -14,14 +14,16 @@ __all__ = [
 
 
 class MxLoopBase(ABC):
-    @abstractproperty
+    @property
+    @abstractmethod
     def loop(self) -> asyncio.AbstractEventLoop:
         """
         Get the stored event loop or return one from the environment
         Should be stored in `self._loop` in the child class
         """
 
-    @abstractstaticmethod
+    @staticmethod
+    @abstractmethod
     def _get_loop() -> asyncio.AbstractEventLoop:
         """
         Get the environment loop. It is up to the implementation

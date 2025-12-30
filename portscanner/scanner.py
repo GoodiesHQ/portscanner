@@ -3,23 +3,20 @@ Implementation of an asynchronous port scanner
 """
 
 from codecs import decode
-from contextlib import suppress
-from dataclasses import dataclass
-from enum import IntEnum, auto
 from functools import partial
-from ipaddress import ip_address
 from socket import AF_INET, AF_INET6, AF_UNSPEC
-from typing import Optional, List, Union, Sequence, get_args, Iterable, Collection
+from types import TracebackType
+from typing import Optional, List, Type, Sequence, get_args, Collection
 import asyncio
 import sys
 import time
+import traceback
 
 from aiodns import DNSResolver
-from aiodns.error import DNSError
 
 from portscanner.mixins import MxLoop, MxResolver, MxWorkPool
-from portscanner.types import IPAddress, IPNetwork, IPTypes, IPAny, ScanInfo, ScanState
-from portscanner.utils import trycast, trycast_many, flattener, flatten
+from portscanner.types import IPAddress, IPNetwork, IPAny, ScanInfo, ScanState, Target, TargetIP
+from portscanner.utils import flatten
 
 
 class PortScanner(MxLoop, MxResolver, MxWorkPool):
@@ -47,8 +44,24 @@ class PortScanner(MxLoop, MxResolver, MxWorkPool):
     def __enter__(self):
         return self
 
-    def __exit__(self, *args):
-        return True
+    def __exit__(self,
+                    exc_type: Optional[Type[BaseException]],
+                    exc: Optional[BaseException],
+                    tb: Optional[TracebackType]):
+        if exc_type is KeyboardInterrupt:
+            print("\n[!] Scan interrupted by user", file=sys.stderr)
+        return False
+
+    async def __aenter__(self):
+        return self
+    
+    async def __aexit__(self,
+                    exc_type: Optional[Type[BaseException]],
+                    exc: Optional[BaseException],
+                    tb: Optional[TracebackType]):
+        if exc_type is KeyboardInterrupt:
+            print("\n[!] Scan interrupted by user", file=sys.stderr)
+        return False
 
     def _run(self, coro):
         return asyncio.wait_for(coro, timeout=self._timeout)
@@ -62,31 +75,49 @@ class PortScanner(MxLoop, MxResolver, MxWorkPool):
         all: bool = True,
         verbose: bool = False,
     ):
-        resolved_hosts = []
+        # Internal method to resolve all ofthe provided hosts
+        async def resolve(original: IPAny, qtype: str = "A") -> List[Target]:
+            targets: List[Target] = []
+            if all:
+                results = await self.resolve_all(original, qtype=qtype)
+                if results is not None and len(results) > 0:
+                    targets.extend(results)
+            else:
+                result = await self.resolve(original, qtype=qtype)
+                if result is not None:
+                    targets.append(result)
+            return targets
 
-        # Resolve all hosts first before scanning is initiated
-        resolver = self.resolve_all if all else self.resolve
+        # Task generator to resolve all hosts
         tasks = (
-            resolver(host, qtype=qt) for qt in flatten(qtype) for host in iter(hosts)
+            resolve(host, qtype=qt)
+              for qt in flatten(qtype)
+                for host in iter(hosts)
         )
         if verbose:
             start = time.time()
-        async for resolved_host in self.worker_run_many(tasks):
-            if resolved_host:
-                if isinstance(resolved_host, List):
-                    resolved_hosts += resolved_host
-                else:
-                    resolved_hosts.append(resolved_host)
 
+        # Maintain a list of all resolved targets
+        resolved_targets: List[Target] = []
+        async for targets in self.worker_run_many(tasks):
+            resolved_targets += targets
+        
         if verbose:
             print(
                 f"Resolution of {len(hosts)} hosts took {time.time()-start:.3f} seconds"
             )
-            total_hosts = sum(rh.num_addresses for rh in resolved_hosts)
+            total_hosts = sum(rh.host.num_addresses for rh in resolved_targets)
             print("Scanning", len(ports), "ports on", total_hosts, "hosts")
 
-        data_gen = flattener(host=resolved_hosts, port=ports)
-        tasks = (self._scan_port(*data) for data in data_gen)
+        tasks = (
+            self._scan_port(
+                target=target,
+                port=port,
+            )
+            for resolved_target in resolved_targets
+            for target in resolved_target
+            for port in ports
+        )
 
         if verbose:
             start = time.time()
@@ -106,27 +137,26 @@ class PortScanner(MxLoop, MxResolver, MxWorkPool):
         return r
 
     async def scan_port(
-        self, host: Union[IPAddress, str], port: int, qtype: str = "A"
+        self, host: IPAny, port: int, qtype: str = "A"
     ) -> ScanInfo:
-        return await self.worker_run(self._scan_port(host, port, qtype))
+        target = await self.resolve(host, qtype)
+        if target.host.num_addresses != 1:
+            raise ValueError("scan_port only accepts single IP addresses")
+        addrs = list(target.iter_ips())
+        return await self.worker_run(self._scan_port(addrs[0], port))
 
     async def _scan_port(
-        self, host: Union[IPAddress, str], port: int, qtype: str = "A"
+        self, target: TargetIP, port: int
     ) -> ScanInfo:
         try:
-            if (host := await self.resolve(host)) is None:
-                raise ValueError(f"Invalid host '{host}'")
-            if isinstance(host, get_args(IPNetwork)):
-                host = host[0]
-
             family = {
                 4: AF_INET,
                 6: AF_INET6,
-            }.get(host.version, AF_UNSPEC)
+            }.get(target.addr.version, AF_UNSPEC)
 
             # Set initial values
             state, banner, reader, writer = ScanState.UNKNOWN, None, None, None
-            fut = asyncio.open_connection(host=str(host), port=port, family=family)
+            fut = asyncio.open_connection(host=str(target.addr), port=port, family=family)
             reader, writer = await self._run(fut)
             state = ScanState.OPEN
             if self._banner_buffer:
@@ -149,4 +179,4 @@ class PortScanner(MxLoop, MxResolver, MxWorkPool):
             if writer:
                 writer.close()
                 await writer.wait_closed()
-            return ScanInfo(host=host, port=port, state=state, banner=banner)
+            return ScanInfo(name=target.name, addr=target.addr, port=port, state=state, banner=banner)

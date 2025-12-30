@@ -85,7 +85,7 @@ def flatten(*values):
             yield value
 
 
-def flattener(**iterables):
+def flattener(**iterables) -> Iterable[namedtuple]:
     """
     Nested loop through named iterables. The names provided of the iterables
     are the name names provided in the output, but each `yield` will be
