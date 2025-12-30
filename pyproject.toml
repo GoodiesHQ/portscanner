@@ -1,21 +1,21 @@
-[tool.poetry]
+[project]
 name = "portscanner"
 version = "0.6.0"
 description = "Asynchronous Port Scanner"
-authors = ["GoodiesHQ <aarcher73k@gmail.com>"]
+requires-python = ">=3.10,<4.0"
+authors = [{ name = "GoodiesHQ", email = "aarcher73k@gmail.com" }]
+dependencies = [
+  "aiodns>=3.6,<4.0",
+  "colorama>=0.4.6,<1.0",
+]
 
-[tool.poetry.scripts]
-portscanner = 'portscanner.console:run'
+[project.scripts]
+portscanner = "portscanner.__main__:run"
 
-[tool.poetry.dependencies]
-python = "^3.8"
-aiodns = "^2.0.0"
-colorama = "^0.4.4"
-
-[tool.poetry.dev-dependencies]
-pytest = "^6.2.2"
-black = "^20.8b1"
+[tool.poetry.group.dev.dependencies]
+pytest = "^9.0"
+black = "^25.0"
 
 [build-system]
-requires = ["poetry-core>=1.0.0"]
+requires = ["poetry-core>=1.9.0"]
 build-backend = "poetry.core.masonry.api"
