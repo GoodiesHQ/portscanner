@@ -180,20 +180,17 @@ def run():
         verbose=args.verbose,
     )
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     try:
-        loop.run_until_complete(task)
+        asyncio.run(task)
     except ValueError as ve:
         print(f"[-] Error: {ve}")
     except KeyboardInterrupt:
         print("[!] Scan interrupted by user")
+        raise SystemExit(130)
     except Exception as e:
         print(e)
         traceback.print_exc()
         pass
-    finally:
-        cleanup(loop)
 
 
 if __name__ == "__main__":
