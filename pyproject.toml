@@ -1,6 +1,6 @@
 [project]
 name = "portscanner"
-version = "0.6.0"
+version = "0.7.0"
 description = "Asynchronous Port Scanner"
 requires-python = ">=3.10,<4.0"
 authors = [{ name = "GoodiesHQ", email = "aarcher73k@gmail.com" }]
