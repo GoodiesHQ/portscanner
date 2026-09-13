@@ -1,9 +1,9 @@
 """
 WorkPool implementation to allow for limited execution of an unbounded number of tasks
 """
+
 from abc import ABC, abstractmethod
-from contextlib import suppress
-from typing import Coroutine, Iterable
+from typing import Any, AsyncIterator, Coroutine, Iterable
 import asyncio
 
 __all__ = [
@@ -37,12 +37,14 @@ class MxWorkPoolBase(ABC):
         """Number of workers"""
 
     @abstractmethod
-    async def worker_run(self, coro: Coroutine) -> asyncio.Future:
-        """Run a single corotuine in the pool and return its corresponding future"""
+    def worker_run(self, coro: Coroutine, *callbacks) -> asyncio.Task:
+        """Run a single coroutine in the pool and return its corresponding task"""
 
     @abstractmethod
-    async def worker_run_many(self, coros: Coroutine) -> asyncio.Future:
-        """Run a single corotuine in the pool and return its corresponding future"""
+    def worker_run_many(
+        self, coros: Iterable[Coroutine], timeout: float = 1.0
+    ) -> AsyncIterator[Any]:
+        """Run coroutines in the pool, bounded to worker_count at a time, yielding results as they complete"""
 
 
 class MxWorkPool(MxWorkPoolBase):
@@ -50,14 +52,16 @@ class MxWorkPool(MxWorkPoolBase):
 
     def __init__(self, worker_count: int):
         """Set worker count and create the shared semaphore"""
+        if worker_count < 1:
+            raise ValueError("workers must be positive")
         self._worker_count = worker_count
         self.__sem = asyncio.Semaphore(worker_count)
 
     @property
     def loop(self) -> asyncio.AbstractEventLoop:
-        if hasattr(self, "_loop"):
+        if getattr(self, "_loop", None) is not None:
             return self._loop
-        return asyncio.get_event_loop()
+        return asyncio.get_running_loop()
 
     @property
     def worker_available(self) -> bool:
@@ -71,59 +75,55 @@ class MxWorkPool(MxWorkPoolBase):
     def worker_count(self) -> int:
         return self._worker_count
 
-    def worker_run(self, coro: Coroutine, *callbacks) -> asyncio.Future:
+    def worker_run(self, coro: Coroutine, *callbacks) -> asyncio.Task:
+        started = False
+
         async def worker():
-            # with suppress(asyncio.CancelledError):
+            nonlocal started
             async with self.worker_sem:
+                started = True
                 return await coro
 
-        fut = self.loop.create_task(worker())
+        def close_unstarted(task):
+            if not started:
+                coro.close()
+
+        task = self.loop.create_task(worker())
+        task.add_done_callback(close_unstarted)
         for callback in callbacks:
-            fut.add_done_callback(callback)
-        return fut
+            task.add_done_callback(callback)
+        return task
 
     async def worker_run_many(self, coros: Iterable[Coroutine], timeout: float = 1.0):
-        futures: set[asyncio.Future] = set()
-        init = False
-        
-        async def drain(t: float):
-            nonlocal futures
-            if not futures:
-                return
-            done, futures = await asyncio.wait(
-                futures, timeout=t, return_when=asyncio.FIRST_COMPLETED
-            )
+        """
+        Yield completed results with bounded task creation.
 
-            for task in done:
-                if task.cancelled():
-                    continue
-                exc = task.exception()
-                if exc is not None:
-                    for fut in futures:
-                        fut.cancel()
-                    await asyncio.gather(*futures, return_exceptions=True)
-                    raise exc
-                yield task.result()
-
-        wait = 0
+        The timeout argument is retained for compatibility; completion wakes the
+        pool immediately, without polling.
+        """
+        iterator = iter(coros)
+        pending = set()
+        exhausted = False
         try:
-            while futures or not init:
-                init = True
-                async for item in drain(wait):
-                    yield item
-                if len(futures) < self.worker_count:
-                    wait = 0
-                    with suppress(StopIteration):
-                        futures.add(self.worker_run(next(coros)))
-                        continue
-                wait = timeout
-        except asyncio.CancelledError:
-            for fut in futures:
-                fut.cancel()
-            await asyncio.gather(*futures, return_exceptions=True)
-            raise
+            while True:
+                while not exhausted and len(pending) < self.worker_count:
+                    try:
+                        coro = next(iterator)
+                    except StopIteration:
+                        exhausted = True
+                    else:
+                        pending.add(self.worker_run(coro))
+                if not pending:
+                    break
+                done, _ = await asyncio.wait(
+                    pending, return_when=asyncio.FIRST_COMPLETED
+                )
+                for task in done:
+                    result = task.result()
+                    pending.remove(task)
+                    yield result
         finally:
-            for fut in futures:
-                fut.cancel()
-            if futures:
-                await asyncio.gather(*futures, return_exceptions=True)
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)

@@ -3,13 +3,12 @@ Loop acquisition mixin for PortScanner
 """
 
 from abc import ABC, abstractmethod
-from contextlib import suppress
 from typing import Optional
 import asyncio
 
 __all__ = [
-    "MXLoopBase",
-    "MXLoop",
+    "MxLoopBase",
+    "MxLoop",
 ]
 
 
@@ -33,20 +32,12 @@ class MxLoopBase(ABC):
 
 class MxLoop(MxLoopBase):
     def __init__(self, loop: Optional[asyncio.AbstractEventLoop] = None):
-        self._loop = loop or self._get_loop()
+        self._loop = loop
 
     @property
     def loop(self) -> asyncio.AbstractEventLoop:
         return self._loop or self._get_loop()
 
     @staticmethod
-    def _get_loop() -> Optional[asyncio.AbstractEventLoop]:
-        with suppress(RuntimeError):
-            return getattr(
-                asyncio,
-                "get_running_loop",
-                asyncio.get_event_loop,
-            )()
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        return loop
+    def _get_loop() -> asyncio.AbstractEventLoop:
+        return asyncio.get_running_loop()

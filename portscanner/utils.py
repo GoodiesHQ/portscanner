@@ -1,13 +1,13 @@
 """
 Utilities and helper functions/classes for PortScanner
 """
+
 from collections import namedtuple
 from functools import partial, wraps
 from itertools import product
 from portscanner.types import IPNetwork
 from typing import Collection, Iterable, Text
 import asyncio
-
 
 __all__ = [
     "splat",
@@ -35,7 +35,7 @@ def cleanup(loop: asyncio.AbstractEventLoop):
     """
     Safe cleanup method to destroy all pending tasks
     """
-    while (pending := asyncio.all_tasks(loop)) :
+    while pending := asyncio.all_tasks(loop):
         for task in pending:
             task.cancel()
         loop.run_until_complete(asyncio.wait(pending))
@@ -59,8 +59,8 @@ def trycast(new_type, value, default=None):
     Attempt to cast `value` as `new_type` or `default` if conversion fails
     """
     try:
-        default = new_type(value)
-    finally:
+        return new_type(value)
+    except (TypeError, ValueError):
         return default
 
 
