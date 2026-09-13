@@ -5,7 +5,7 @@ description = "Asynchronous Port Scanner"
 requires-python = ">=3.10,<4.0"
 authors = [{ name = "GoodiesHQ", email = "aarcher73k@gmail.com" }]
 dependencies = [
-  "aiodns>=3.6,<4.0",
+  "aiodns (>=4.0.4,<5.0.0)",
   "colorama>=0.4.6,<1.0",
 ]
 
@@ -13,8 +13,8 @@ dependencies = [
 portscanner = "portscanner.__main__:run"
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^9.0"
-black = "^25.0"
+pytest = "^9.1.1"
+black = "^26.5.1"
 
 [build-system]
 requires = ["poetry-core>=1.9.0"]
